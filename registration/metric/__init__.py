@@ -4,7 +4,6 @@ metrics to quantify the similarity between two objects.
 """
 
 from .basis import *
-from .fields import *
 from .densities import *
 from .landmark import *
 
