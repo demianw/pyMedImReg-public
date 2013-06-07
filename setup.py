@@ -18,7 +18,6 @@ def configuration(parent_package='', top_path=None):
     config = Configuration(None, parent_package, top_path)
     config.set_options(quiet=True)
     config.add_subpackage('registration')
-    config.add_subpackage('airway_tools')
     return config
 
 
