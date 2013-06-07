@@ -1,4 +1,4 @@
-from _metrics import gauss_transform, gauss_process_w_covar_transform
+from _metrics import gauss_transform
 from .basis import Metric
 import numpy
 
