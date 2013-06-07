@@ -1,0 +1,194 @@
+#!/usr/bin/env python
+import sys
+from argparse import ArgumentParser
+from itertools import izip
+
+
+numpy = None
+registration = None
+
+
+def main():
+    usage = """
+    usage: %(prog)s [options] -o bundle.vtk -i image -n quantity_name  bundle.vtk
+    """
+    parser = ArgumentParser(usage=usage)
+    parser.add_argument('-o', "--output", dest="output_prefix",
+                        help="")
+    parser.add_argument('-m', "--moving", dest="moving",
+                        help="image to extract the scalar quantity from")
+    parser.add_argument('-r', "--ref", dest="reference",
+                        help="name to give to the scalar quantity to add")
+    parser.add_argument('--subsample', dest="subsample", type=int,
+                        help="Name of a file with all the values on the tract points",
+                        )
+    parser.add_argument('--affine_scales', dest="affine_scales", type=float, nargs='+',
+                        default=[2., 1., .5],
+                        help="Name of a file with all the values on the tract points",
+                        )
+    parser.add_argument('-s', '--polyaffine_smoothnesses', dest="polyaffine_smoothnesses", type=float, nargs='+',
+                        default=[1., 1. / 2., 1. / 4., 1. / 8.],
+                        help="Name of a file with all the values on the tract points",
+                        )
+    parser.add_argument('-l', '--polyaffine_resolutions', dest="polyaffine_resolutions", type=float, nargs='+',
+                        default=[1., 2., 4., 8.],
+                        help="Name of a file with all the values on the tract points",
+                        )
+
+    parser.add_argument('--noaffine', dest='affine', action='store_false',
+                        help='Skip affine registration'
+                        )
+
+    parser.add_argument('--nodeformable', dest='deformable', action='store_false',
+                        help='Skip deformable registration'
+                        )
+
+    args = parser.parse_args()
+
+    import cPickle
+
+    global numpy, registration
+    import numpy
+    import registration
+
+    from tract_querier.tractography import tractography_from_vtk_files
+    from tract_querier.tractography import vtkInterface
+
+    moving = tractography_from_vtk_files(args.moving)
+    reference = tractography_from_vtk_files(args.reference)
+    args.affine_scales = numpy.atleast_1d(args.affine_scales)
+    args.polyaffine_resolutions = numpy.atleast_1d(args.polyaffine_resolutions)
+    args.polyaffine_smoothnesses = numpy.atleast_1d(args.polyaffine_smoothnesses)
+
+    if args.subsample:
+        moving.subsample_tracts(args.subsample)
+        reference.subsample_tracts(args.subsample)
+
+    if args.affine:
+        affine_transforms = affine_registration(
+            reference.tracts_to_process(),
+            moving.tracts_to_process(),
+            args.affine_scales
+        )
+
+        cPickle.dump(affine_transforms, open(args.output_prefix + '_affine.pck', 'wb'))
+
+        affine_warped_tracts = []
+        for tract in moving.original_tracts():
+            for transform in affine_transforms:
+                tract = transform.transform_points(tract)
+            affine_warped_tracts.append(tract)
+
+        vtkInterface.writeLinesToVtkPolyData(
+            args.output_prefix + '_affine.vtk',
+            affine_warped_tracts,
+            # tractography.original_tracts_data()
+        )
+    else:
+        affine_warped_tracts = moving.tracts_to_process()
+
+    if args.deformable:
+        deformable_transforms = deformable_registration(
+            reference.tracts_to_process(),
+            affine_warped_tracts,
+            args.affine_scales,
+            args.polyaffine_resolutions,
+            args.polyaffine_smoothnesses,
+        )
+
+        cPickle.dump(deformable_transforms, open(args.output_prefix + '_deformable.pck', 'wb'))
+
+        warped_tracts = []
+        for tract in affine_warped_tracts:
+            for transform in deformable_transforms:
+                tract = transform.transform_points(tract)
+            warped_tracts.append(tract)
+
+        vtkInterface.writeLinesToVtkPolyData(
+            args.output_prefix + '_deformable.vtk',
+            warped_tracts,
+            # tractography.original_tracts_data()
+        )
+
+
+def affine_registration(reference_tracts, moving_tracts, scales, initialize_with_center_of_mass=True):
+    mean_delta = sum(
+        ((numpy.sqrt((numpy.diff(t, axis=0) ** 2).sum(1))).mean() for t in reference_tracts)
+    ) / len(reference_tracts)
+
+    fixed = numpy.ascontiguousarray(numpy.vstack(reference_tracts))
+    moving = numpy.ascontiguousarray(numpy.vstack(moving_tracts))
+
+    center = fixed.mean(0)
+
+    metric = [
+        registration.Correlation(fixed, mean_delta * scale)
+        for scale in scales
+    ]
+
+    affines = [
+        registration.Translation(),
+        registration.Rigid(center),
+        registration.Affine(center)
+    ]
+
+    if initialize_with_center_of_mass:
+        affines[0].initial = affines[0].identity.copy()
+        affines[0].initial[:] = moving.mean(0) - fixed.mean(0)
+
+    reg_affine = registration.Registration(
+        metric=metric,
+        model=affines,
+        optimizer=registration.ScipyLBFGS(None, {'disp': 1, 'disp': 1})
+    )
+    reg_affine.register(moving)
+
+    return reg_affine.model
+
+
+def deformable_registration(tracts, deformed_tracts, scales, polyaffine_resolutions, polyaffine_smoothnesses):
+    mean_delta = sum(
+        ((numpy.sqrt((numpy.diff(t, axis=0) ** 2).sum(1))).mean() for t in tracts)
+    ) / len(tracts)
+
+    fixed = numpy.ascontiguousarray(numpy.vstack(tracts))
+    moving = numpy.ascontiguousarray(numpy.vstack(deformed_tracts))
+
+    all_points = numpy.vstack((fixed, moving))
+    bounding_box = numpy.c_[[
+        all_points.min(0) - 5,
+        all_points.max(0) + 5
+    ]].T
+    max_distance = (bounding_box[:, 1] - bounding_box[:, 0]).max()
+
+    print "Starting Deformable registration:"
+    print "\t Resolution factors: ", max_distance * polyaffine_resolutions
+    print "\t Smoothing factors: ", max_distance * polyaffine_smoothnesses
+
+    metric = [
+        registration.Correlation(fixed, mean_delta * scale)
+        for scale in scales
+    ]
+
+    lie_opt = registration.LieAlgebraLogEucSteepestGradientDescent(
+        None, registration.PolyAffine.exp, registration.PolyAffine.log,
+        registration.PolyAffine.gradient_log, {'disp': True}
+    )
+    polyaffines = [
+        registration.PolyAffine(
+            bounding_box,
+            max_distance * resolution,
+            max_distance * smoothness
+        )
+        for resolution, smoothness in izip(polyaffine_resolutions, polyaffine_smoothnesses)
+    ]
+    reg = registration.Registration(metric=metric, model=polyaffines, optimizer=lie_opt)
+
+    reg.register(numpy.ascontiguousarray(moving), iprint=1)
+
+    return reg.model
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit()

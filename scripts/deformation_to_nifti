@@ -1,0 +1,221 @@
+#!/usr/bin/env python
+
+import sys
+from argparse import ArgumentParser
+from itertools import izip
+
+
+numpy = None
+registration = None
+vtk = None
+particletype = None
+registration = None
+ns = None
+linalg = None
+
+
+def main():
+    usage = """
+    usage: %(prog)s [options] -o nifti_image -i deformation_field -r reference_data
+    """
+    parser = ArgumentParser(usage=usage)
+    parser.add_argument('-o', "--output", dest="output",
+                        help="Output nifti file name")
+    parser.add_argument('-i', "--input", dest="input",
+                        help="Input transform")
+    parser.add_argument('-r', "--reference", dest="reference",
+                        help="Reference object")
+    parser.add_argument('-b', "--bounding_box", dest="bounding_box", type=float, nargs='+',
+                        help="Bounding box",
+                        )
+    parser.add_argument('--resolution', dest="resolution", type=float,
+                        default=[1.],
+                        help="resolution of the image",
+                        )
+
+    parser.add_argument('--jacobian', dest='jacobian', action='store_true', default=False,
+                        help=''
+                        )
+
+    parser.add_argument('--nonlinear', dest='nonlinear', action='store_true', default=False,
+                        help=''
+                        )
+
+    args = parser.parse_args()
+
+    global numpy, registration, particletype
+    global ns, vtk, numpy, linalg
+
+    from vtk.util import numpy_support as ns
+    import vtk
+    import cPickle
+    import numpy
+    from numpy import linalg
+    from registration import model
+    import nibabel
+    import os
+
+    transform = cPickle.load(open(args.input))
+
+    if isinstance(transform, list):
+        for t in transform:
+            print t
+            if args.nonlinear and isinstance(t, model.KernelBasedTransform):
+                t.parameter[:12] = t.identity[:12]
+        transform = model.ComposedTransform(transform)
+    else:
+        print t
+
+    reference_airway = read_airway(args.reference)
+
+    all_points = reference_airway[0]
+
+    #max_frobenius_norm = max((
+    #    (
+    #        reference_airway[1] * reference_airway[1].swapaxes(-1, -2)
+    #    )[:, (0, 1, 2), (0, 1, 2)].sum(-1)
+    #))
+    max_frobenius_norm = max((
+        numpy.linalg.norm(t) for t in reference_airway[1]
+    ))
+
+    bounding_box = numpy.c_[[
+        all_points.min(0) - max_frobenius_norm,
+        all_points.max(0) + max_frobenius_norm
+    ]].T
+
+    grid = model.grid_from_bounding_box_and_resolution(bounding_box, args.resolution)
+    dims = tuple((len(numpy.unique(grid[:, i])) for i in xrange(3))) + (3,)
+    image = numpy.empty((numpy.prod(dims[:-1]), 3), dtype=float)
+    image_jac_det = numpy.empty((numpy.prod(dims[:-1]), 1))
+    print "Dimensions %s number of points: %d" % (str(dims[:-1]), numpy.product(dims[:-1]))
+
+    if len(grid) > 1000:
+        transformed_grid = numpy.empty((len(grid), 3))
+        step = 1000
+        for i in xrange(0, len(grid), step):
+            print "%04d: %04d of %4d" % (i, i + step, len(grid))
+            transformed_grid[i: min(i + step, len(grid))] = (
+                transform.transform_points(grid[i: min(i + step, len(grid))])
+            )
+    else:
+        transformed_grid = transform.transform_points(grid)
+
+    image[:, :] = transformed_grid - grid
+
+    polydata = vtk.vtkPolyData()
+    points = vtk.vtkPoints()
+    points.GetData().DeepCopy(ns.numpy_to_vtk(numpy.ascontiguousarray(grid.astype(float))))
+    points.Modified()
+    polydata.SetPoints(points)
+    vector_array = vtk.vtkFloatArray()
+    vector_array.DeepCopy(ns.numpy_to_vtk(numpy.ascontiguousarray(image.astype(float))))
+    polydata.GetPointData().SetVectors(vector_array)
+
+
+    image = image.reshape(*dims)
+
+    affine = numpy.eye(4)
+    affine[numpy.diag_indices(3)] = args.resolution
+    affine[:3, -1] = bounding_box[:, 0]
+
+
+    mesh_former = vtk.vtkRectilinearGridToTetrahedra()
+    mesh_former.SetInput(
+            *(numpy.r_[
+            (bounding_box[:, 1] - bounding_box[:, 0]).squeeze(),
+            affine.diagonal()[:-1]
+            , 1e-4])
+    )
+    mesh_former.SetTetraPerCell(5)
+    extract_edges = vtk.vtkExtractEdges()
+    extract_edges.SetInput(mesh_former.GetOutput())
+    tubes = vtk.vtkTubeFilter()
+    tubes.SetInput(extract_edges.GetOutput())
+    stripper = vtk.vtkStripper()
+    stripper.SetInput(tubes.GetOutput())
+    clean = vtk.vtkCleanPolyData()
+    clean.SetInput(stripper.GetOutput())
+    mesh = clean.GetOutput()
+    mesh.Update()
+
+    mesh_points = ns.vtk_to_numpy(mesh.GetPoints().GetData())
+    mesh_points[:] = mesh_points + bounding_box[:, 0].squeeze()[None, :]
+    mesh_points[:] = transform.transform_points(mesh_points)
+
+    nii = nibabel.Nifti1Image(image, affine)
+    nii.set_qform(affine)
+    nii.to_filename(args.output)
+
+    fname, ext = os.path.splitext(args.output)
+    if ext == 'gz':
+        fname, ext2 = os.path.splitext(fname)
+        ext = ext2 + '.' + ext
+
+    mesh_writer = vtk.vtkPolyDataWriter()
+    mesh_writer.SetFileName(fname + '_grid.vtk')
+    mesh_writer.SetInput(mesh)
+    mesh_writer.Write()
+
+
+    fname_pd = fname + '.vtk'
+    pdw = vtk.vtkPolyDataWriter()
+    pdw.SetFileName(fname_pd)
+    pdw.SetInput(polydata)
+    pdw.SetFileTypeToBinary()
+    pdw.Update()
+    pdw.Write()
+
+    if args.jacobian:
+        print "Calculating jacobians"
+        image_jac_det[:] = numpy.array([
+            linalg.det(t) for t in transform.jacobian_position(grid)
+        ])[:, None]
+        polydata.GetPointData().SetScalars(ns.numpy_to_vtk(image_jac_det.ravel().astype(float)))
+        polydata.GetPointData().GetScalars().SetName('jacobian determinant')
+
+        image_jac_det = image_jac_det.reshape(*(dims[:3]))
+
+        fname_jac_det = fname + '_jac_determinant' + ext
+        nii = nibabel.Nifti1Image(image_jac_det, affine)
+        nii.set_qform(affine)
+        nii.to_filename(fname_jac_det)
+
+
+def read_airway(filename, dist=2):
+    pdr = vtk.vtkPolyDataReader()
+    pdr.SetFileName(filename)
+    pdr.Update()
+
+    pd = pdr.GetOutput()
+
+    points = ns.vtk_to_numpy(pd.GetPoints().GetData())
+
+    data = pd.GetPointData()
+
+    if (data is not None) and (data.GetTensors() is not None):
+        new_hessians = ns.vtk_to_numpy(data.GetTensors()).reshape(len(points), 3, 3)
+        vectors = ns.vtk_to_numpy(data.GetVectors()).reshape(len(points), 3)
+    else:
+        if (data is None) or (not data.HasArray('hess')):
+            data = pd.GetFieldData()
+
+        hessians = ns.vtk_to_numpy(data.GetArray('hess'))
+        scales = ns.vtk_to_numpy(data.GetArray('scale'))
+        vectors = ns.vtk_to_numpy(data.GetArray('hevec0'))
+        new_hessians = numpy.empty((len(hessians), 3, 3), dtype=hessians.dtype)
+
+        for i, hessian, scale in izip(xrange(len(points)), hessians, scales):
+            eval, evec = linalg.eigh(hessian.reshape(3, 3))
+            eval_order = numpy.argsort(numpy.abs(eval))
+            eval[eval_order] = (dist, scale, scale)
+
+            nh = numpy.dot(numpy.dot(evec, numpy.diag(eval)), evec.T)
+            new_hessians[i] = nh
+
+    return points, new_hessians, vectors
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit()

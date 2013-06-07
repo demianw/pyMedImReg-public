@@ -1,0 +1,447 @@
+#!/PHShome/dw808/acil/Code/epd-7.3-2-rh5-x86_64/bin/python2.7
+import sys
+import itertools
+from argparse import ArgumentParser, FileType, REMAINDER
+
+numpy = None
+
+def airway_math_operation(help_text):
+    '''
+    Decorator to identify airway_math functionalities the name of the
+    function will be automatically incorporated to the airway_math options
+
+    Parameters
+    ----------
+    help_text: help for the operation
+    '''
+    def internal_decorator(func):
+        func.help_text = help_text
+        return func
+    return internal_decorator
+
+
+def main():
+    functions_list = dict((
+        (f[0], f[1]) for f in globals().items() if hasattr(f[1], 'help_text')
+    ))
+
+    usage = r"""
+    usage: %(prog)s <airway1.vtk> ... <airwayN.vtk> operation <operation parameter1> ... <operation parameterN> <output_airway.vtk>
+
+    Available operations:
+    """
+
+    function_list_names = functions_list.keys()
+    function_list_names.sort()
+    for f in function_list_names:
+        usage += '\t%s %s\n' % (f, functions_list[f].help_text)
+
+    #The first arguments, except for the last one, might be airway files
+    n_airways = sum(
+        1 for _ in
+        itertools.takewhile(
+            lambda x: x not in function_list_names, sys.argv[1:-1]
+        )
+    )
+
+    if n_airways == len(sys.argv[1:]):
+        n_airways -= 1
+
+    parser = ArgumentParser(usage=usage)
+    parser.add_argument('airways', nargs=n_airways, help='airway files', type=FileType('r'))
+    parser.add_argument('operation', type=str, choices=function_list_names,
+                        help="operation to use")
+    parser.add_argument('operation_parameters', type=str, nargs=REMAINDER,
+                        help="operation parameters")
+
+    args = parser.parse_args()
+    #Load the global modules after the parsing of parameters
+    global tr, vtkInterface, numpy, nibabel, Airway, read_airway, save_airway
+    from airway_tools.io import Airway, read_airway, save_airway
+    import numpy
+    import nibabel
+
+    airways = []
+    try:
+        for f in args.airways:
+            airways.append(read_airway(f.name))
+    except IOError as e:
+        print >>sys.stderr, "Error reading file ", f.name, "(%s)" % repr(e)
+
+    if  args.operation in functions_list:
+        try:
+            functions_list[args.operation](airways, *args.operation_parameters)
+        except TypeError:
+            parser.error("Wrong number of parameters for the operation")
+    else:
+        parser.error("Operation not found")
+
+@airway_math_operation('[scalar] <output_name>: save the airway in polydata format')
+def airway_save_polydata(airway, *args):
+    airway_out = args[-1]
+    if len(args) > 1:
+        scalars = args[-2]
+    else:
+        scalars = None
+    save_airway(airway_out, airway[0], scalars=scalars)
+
+@airway_math_operation(': dimensions of the airway bounding box')
+def airway_dimensions(airway):
+    print airway[0].points.ptp(0)
+
+@airway_math_operation(': counts the number of points in the airway')
+def airway_count(airway):
+    print len(airway[0].points)
+
+
+@airway_math_operation(
+    '<other_airways>: calculates mean distance to the other airway points '
+    'assuming order and 1:1 correspondance'
+)
+def airway_point_to_point_distance(airways, *second_airways_filenames):
+    for second_airway_filename in second_airways_filenames:
+        try:
+            second_airway = read_airway(second_airway_filename)
+
+            distances = numpy.sqrt(
+                ((second_airway.points - airways[0].points) ** 2).sum(-1)
+            )
+            print "%s: %3.4f +- %3.4f" %(
+                (second_airway_filename),
+                distances.mean(),
+                distances.std()
+            )
+        except:
+            print "Error with file %s" % (second_airway_filename)
+
+
+@airway_math_operation(
+    '<other_airways>: calculates mean distance to the other airway points '
+)
+def airway_mse_distance(airways, *second_airways_filenames):
+    from scipy import spatial
+
+    tree = spatial.cKDTree(airways[0].points)
+
+    for second_airway_filename in second_airways_filenames:
+        try:
+            second_airway = read_airway(second_airway_filename)
+            distances, _ =  tree.query(second_airway.points)
+            print "%s: %3.4f +- %3.4f" %(
+                (second_airway_filename),
+                distances.mean(),
+                distances.std()
+            )
+        except IOError:
+            print "Error with file %s" % (second_airway_filename)
+
+@airway_math_operation(
+    '<other_airways>: calculates mean volume difference to the other airway points '
+)
+def airway_mse_volume(airways, *second_airways_filenames):
+    from scipy import spatial
+    from numpy.linalg import eigvalsh
+
+    tree = spatial.cKDTree(airways[0].points)
+
+    def tensor_volume(t):
+        ev = eigvalsh(t)
+        ev.sort()
+        return ev[1:].prod()
+
+    volume = numpy.zeros(len(airways[0].tensors))
+
+    for i, tens in enumerate(airways[0].tensors):
+        volume[i] = tensor_volume(tens)
+
+    for second_airway_filename in second_airways_filenames:
+        try:
+            second_airway = read_airway(second_airway_filename)
+            distances, indices =  tree.query(second_airway.points)
+
+            volume_diff = numpy.zeros_like(distances)
+            for i, n in enumerate(indices):
+                volume_diff[i] = (volume[n] - tensor_volume(second_airway.tensors[i])) ** 2
+
+            print "%s: %3.4f +- %3.4f" %(
+                (second_airway_filename),
+                volume_diff.mean(),
+                volume_diff.std()
+            )
+        except IOError:
+            print "Error with file %s" % (second_airway_filename)
+
+
+@airway_math_operation(
+    '<other_airways>: calculates mean angle to the other airway points '
+    'assuming order and 1:1 correspondance'
+)
+def airway_point_to_point_angle(airways, *second_airways_filenames):
+    norm_b = numpy.sqrt((airways[0].vectors ** 2).sum(-1))
+    print norm_b
+    for second_airway_filename in second_airways_filenames:
+        second_airway = read_airway(second_airway_filename)
+
+        inner_product = (
+            second_airway.vectors * airways[0].vectors
+        ).sum(-1)
+
+        norm_a = numpy.sqrt(
+            (second_airway.vectors ** 2).sum(-1)
+        )
+
+        angle = numpy.arccos((inner_product / (norm_a * norm_b)).clip(-1, 1))
+
+        print "%s: %3.4f +- %3.4f" %(
+            second_airway_filename,
+            angle.mean(),
+            angle.std()
+        )
+
+
+@airway_math_operation(
+    '<other_airways>: calculates mean volume difference to the other airway points '
+    'assuming order and 1:1 correspondance'
+)
+def airway_point_to_point_volume(airways, *second_airways_filenames):
+    from numpy.linalg import eigvalsh
+    def tensor_volume(t):
+        ev = eigvalsh(t)
+        ev.sort()
+        return ev[1:].prod()
+
+    volume = numpy.array([
+        tensor_volume(t) for t in
+        airways[0].tensors
+    ])
+    for second_airway_filename in second_airways_filenames:
+        second_airway = read_airway(second_airway_filename)
+        pp = second_airway.points[:, 2].argmin()
+
+        volume_2nd = numpy.array([
+            tensor_volume(t) for t in
+            second_airway.tensors
+        ])
+
+        difference = abs(volume - volume_2nd)
+
+        print "%s: %3.4f +- %3.4f (min %3.4f, max %3.4f, median %3.4f)" %(
+            second_airway_filename,
+            difference.mean(),
+            difference.std(), difference.min(), difference.max(), numpy.median(difference)
+        )
+
+
+@airway_math_operation(
+    '<transform1> .. <transformM> {number} <output>: applies a transform to an airway'
+)
+def airway_transform(airways, *args):
+    import cPickle
+    airway_out = args[-1]
+
+    if args[-2].isdigit():
+        number_of_transforms = int(args[-2])
+        transform_filenames = args[:-2]
+    else:
+        number_of_transforms = None
+        transform_filenames = args[:-1]
+
+    transforms = []
+    for fname in transform_filenames:
+        transforms += cPickle.load(open(fname))
+
+    airway_transformed = Airway(
+        airways[0].points.copy(),
+        airways[0].tensors.copy(),
+        airways[0].vectors.copy(),
+        airways[0].data
+    )
+
+    if number_of_transforms >= len(transforms):
+        raise ValueError("There are only %d transforms" % len(transforms))
+
+    for transform in transforms[:number_of_transforms]:
+        airway_transformed = Airway(
+            transform.transform_points(airway_transformed.points),
+            transform.transform_tensors(
+                airway_transformed.points,
+                airway_transformed.tensors
+            ),
+            transform.transform_vectors(
+                airway_transformed.points,
+                airway_transformed.vectors
+            ),
+            airway_transformed.data
+        )
+
+        save_airway(airway_out, airway_transformed)
+
+
+@airway_math_operation(
+    'ratio output: randomly subsamples airway particles'
+)
+def airway_subsample(airways, *args):
+    import numpy
+    from numpy import random
+    r = random.RandomState(0)
+
+    ratio = float(args[-2])
+    airway_out = args[-1]
+
+    N = len(airways[0].points)
+    ixs = numpy.arange(N)
+    r.shuffle(ixs)
+    ixs = ixs[:int(ratio * N)]
+
+    airway_subsampled = Airway(
+        airways[0].points[ixs],
+        airways[0].tensors[ixs],
+        airways[0].vectors[ixs],
+        dict([
+            (k, v[ixs])
+            for k, v in airways[0].data.iteritems()
+        ])
+    )
+
+    save_airway(airway_out, airway_subsampled)
+
+
+@airway_math_operation(
+    'scalar value_min value_max output: filter tree keeping the values in the range'
+)
+def airway_filter_scalar_range(airways, *args):
+    scalar = args[0]
+    scalars_keep = args[1:-1]
+    airway_out = args[-1]
+
+    airway = airways[0]
+    values = airway.data[scalar]
+
+    values_to_keep = (values >= float(scalars_keep[0])) * (values <= float(scalars_keep[1]))
+
+    airway_subsampled = Airway(
+        airways[0].points[values_to_keep],
+        airways[0].tensors[values_to_keep],
+        airways[0].vectors[values_to_keep],
+        dict([
+            (k, v[values_to_keep])
+            for k, v in airways[0].data.iteritems()
+        ])
+    )
+
+    save_airway(airway_out, airway_subsampled, scalars=scalar)
+
+
+
+@airway_math_operation(
+    'output: reorient vectos'
+)
+def airway_reorient(airways, *args):
+    import numpy
+    from scipy import spatial
+    from scipy.sparse import csgraph
+    from numpy import dot
+
+    t = airways[0]
+
+    graph = spatial.distance_matrix(t.points, t.points)
+    mst = csgraph.minimum_spanning_tree(graph)
+
+    mstud = mst + mst.T
+    start = t.points[:, 2].argmax()
+    node_order, predecessors = csgraph.depth_first_order(mstud, start, return_predecessors=True)
+    new_vectors = t.vectors.copy()
+    
+    orientation = numpy.array([0, 0, 1.])
+    for i, pos in enumerate(node_order):
+        v = new_vectors[pos]
+        if numpy.dot(v, orientation) < numpy.dot(v, -orientation):
+            new_vectors[pos] *= -1
+                            
+    for i, pos in enumerate(node_order[1:]):
+        v = new_vectors[pos]
+        vpr = new_vectors[predecessors[pos]]
+        if dot(v, vpr) <  dot(v, -vpr):
+            new_vectors[pos] *= -1
+
+    airway_out = args[-1]
+
+    save_airway(airway_out, Airway(t.points, t.tensors, new_vectors, t.data))
+
+
+@airway_math_operation(
+    'Map attributes listing name and dimensionality'
+)
+def airway_attributes(airways):
+    t = airways[0]
+
+    keys = t.data.keys()
+    keys.sort()
+    for k in keys:
+        v = t.data[k]
+        if v.ndim == 1:
+            d = 1
+        elif v.ndim == 2:
+            d = v.shape[1]
+        else:
+            d = v.shape[1:]
+        print "%s: %s" % (k, str(d))
+
+
+@airway_math_operation(
+    '<attribute> <other_airways>: calculates attribute overlap with the closest points'
+)
+def airway_discrete_attribute_difference(airways, attribute, *second_airways_filenames):
+    from scipy import spatial
+    import numpy
+
+    
+    tree = spatial.cKDTree(airways[0].points)
+
+    if attribute not in airways[0].data:
+        raise ValueError("Attribute %s not in main airway" % attribute)
+
+    unique_values = numpy.unique(airways[0].data[attribute])
+    values = airways[0].data[attribute]
+    counts = {
+        v: (values == v).sum()
+        for v in unique_values
+    }
+
+    cumulative = {v: [] for v in unique_values}
+    for second_airway_filename in second_airways_filenames:
+        try:
+            second_airway = read_airway(second_airway_filename)
+
+            if attribute not in second_airway.data:
+                raise ValueError("Attribute %s not in main airway %s" % (attribute, second_airway_filename))
+
+            second_values = second_airway.data[attribute]
+
+            distances, ix = tree.query(second_airway.points)
+
+            equalities = (values[ix] == second_values)
+           
+            results = [
+                (v, equalities[second_values == v].sum() * 1. / ((second_values== v).sum()))
+#                (v, equalities[second_values == v].sum() * 2. / ((second_values== v).sum() + counts[v]))
+                for v in unique_values
+            ]
+
+            results_str = reduce(lambda x, y: x + "%s: %0.02f  " % y, results, '')[:-1]
+            print "%s: %s" %(
+                (second_airway_filename),
+                results_str
+            )
+            for v, o in results:
+                cumulative[v].append(o)
+        except IOError:
+            print "Error with file %s" % (second_airway_filename)
+
+    totals_str = reduce(lambda x, y: x + "%s: %0.02f +- %0.04f " % (y, numpy.mean(cumulative[y]), numpy.std(cumulative[y])), unique_values, '')
+    print '\n-------\n'
+    print "Totals: " + totals_str
+
+if __name__ == "__main__":
+    main()
+    sys.exit()

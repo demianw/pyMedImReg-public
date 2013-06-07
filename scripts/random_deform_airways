@@ -1,0 +1,111 @@
+#!/usr/bin/env python
+import sys
+from argparse import ArgumentParser
+from itertools import izip, chain
+from airway_tools import io
+
+
+numpy = None
+registration = None
+vtk = None
+ns = None
+np = None
+
+
+def main():
+    usage = """
+    usage: %(prog)s [options] -o bundle.vtk -i image -n quantity_name  bundle.vtk
+    """
+    parser = ArgumentParser(usage=usage)
+    parser.add_argument('-o', "--output", dest="output_prefix",
+                        help="")
+    parser.add_argument('-i', "--input", dest="input",
+                        help="")
+    parser.add_argument('-s', '--spline_smoothnesses', dest="spline_smoothnesses", type=float, nargs='+',
+                        default=[65],
+                        help="Name of a file with all the values on the tract points",
+                        )
+    parser.add_argument('-l', '--spline_resolutions', dest="spline_resolutions", type=float, nargs='+',
+                        default=[125],
+                        help="Name of a file with all the values on the tract points",
+                        )
+    parser.add_argument('--transform_steps', dest='transform_steps', type=int,
+                        help='Compositive transform steps',
+                        default=1
+                        )
+
+    parser.add_argument('--noise', dest='noise', type=float, nargs='+',
+                        help='',
+                        default=[1]
+                        )
+
+    args = parser.parse_args()
+    optimization_params={}
+
+    import cPickle
+
+    global numpy, registration, particletype, linalg
+    import numpy
+    from numpy import linalg
+    import registration
+    from registration.surface_sampling import particletype
+
+    global ns, vtk, np, linalg
+
+    from vtk.util import numpy_support as ns
+    import vtk
+    import numpy as np
+
+    airway = io.read_airway(args.input)
+
+    max_frobenius_norm = max((
+        numpy.linalg.norm(t) for t in airway[1]
+    ))
+
+    bounding_box = numpy.c_[[
+        airway[0].min(0) - max_frobenius_norm,
+        airway[0].max(0) + max_frobenius_norm
+    ]].T
+
+    grids = [
+        registration.model.grid_from_bounding_box_and_resolution(
+            bounding_box,
+            resolution
+        )
+        for resolution in args.spline_resolutions
+    ]
+
+    for i, grid in enumerate(grids):
+        print "Grid %0d: number of control points %04d" % (i, len(grid))
+
+    splines = [
+        registration.model.DiffeomorphicTransformScalingSquaring(
+            registration.KernelBasedTransformNoBasis,
+            args.transform_steps,
+            False,
+            grid,
+            registration.model.InverseExp3DKernel(smoothness),
+        )
+        for grid, smoothness in izip(grids, args.spline_smoothnesses)
+    ]
+
+    warped_airway = io.Airway(airway[0].copy(), airway[1].copy(), airway[2].copy(), airway[3].copy())
+    for i, transform in enumerate(splines):
+        transform.parameter[12:] = np.random.randn(len(transform.parameter[12:])) * args.noise[i]
+        warped_airway = io.Airway(
+            transform.transform_points(warped_airway[0]),
+            transform.transform_tensors(warped_airway[0], warped_airway[1]),
+            transform.transform_vectors(warped_airway[0], warped_airway[2]),
+            warped_airway.data
+        )
+
+    transform_output = args.output_prefix
+    if transform_output.endswith('.vtk'):
+        transform_output = transform_output[:-4]
+    cPickle.dump(splines, open(transform_output + '_deformable.pck', 'wb'))
+    io.save_airway(args.output_prefix, warped_airway)
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit()

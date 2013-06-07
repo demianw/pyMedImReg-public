@@ -1,0 +1,561 @@
+#!/usr/bin/env python2.7
+
+
+from argparse import ArgumentParser
+from copy import deepcopy
+from itertools import izip, chain
+import sys
+from warnings import warn
+
+
+numpy = None
+registration = None
+linalg = None
+
+
+def main():
+    usage = """
+    usage: %(prog)s [options] -o output_prefix -r reference.vtk -m moving.vtk
+    """
+    parser = ArgumentParser(usage=usage)
+    parser.add_argument('-o', "--output", dest="output_prefix", required=True,
+                        help="")
+    parser.add_argument('-m', "--moving", dest="moving", required=True,
+                        help="image to extract the scalar quantity from")
+    parser.add_argument('-r', "--ref", dest="reference", required=True,
+                        help="name to give to the scalar quantity to add")
+    parser.add_argument('--affine_scales', dest="affine_scales", type=float, nargs='+',
+                        default=[],
+                        help="Name of a file with all the values on the tract points",
+                        )
+    parser.add_argument('--deformable_scales', dest="deformable_scales", type=float, nargs='+',
+                        default=[],
+                        help="Scale of the deformable kernel",
+                        )
+    parser.add_argument('--deformable_regularization', dest="deformable_regularization", type=float, nargs='+',
+                        default=[],
+                        help="Weight of the bending regularizer"
+                        )
+    parser.add_argument('--totalscale', dest='total_scale', action='store_true',
+                        help=''
+                        )
+    group_mode = parser.add_mutually_exclusive_group()
+    group_mode.add_argument('--currents', dest='currents', action='store_true', default=False,
+                            help=''
+                            )
+    group_mode.add_argument('--gmm', dest='gmm', action='store_true', default=False,
+                            help=''
+                            )
+    parser.add_argument('-s', '--spline_smoothnesses', dest="spline_smoothnesses", type=float, nargs='*',
+                        default=[],
+                        help="Name of a file with all the values on the tract points",
+                        )
+    parser.add_argument('-l', '--spline_resolutions', dest="spline_resolutions", type=float, nargs='*',
+                        default=[],
+                        help="Name of a file with all the values on the tract points",
+                        )
+
+    parser.add_argument('--noaffine', dest='affine', action='store_false',
+                        help='Skip affine registration'
+                        )
+
+    parser.add_argument('--nodeformable', dest='deformable', action='store_false',
+                        help='Skip deformable registration'
+                        )
+
+    parser.add_argument('--nogrid_points', dest='grid_points', action='store_false',
+                        help='Gridless registration'
+                        )
+
+    parser.add_argument('--nogrid_points_smoothing', dest='non_grid_points_smoothness', type=float,
+                        help='Gridless registration smoothing'
+                        )
+
+    parser.add_argument('--nogrid', dest='grid', action='store_false',
+                        help='Gridless registration'
+                        )
+
+    parser.add_argument('--nogrid_smoothing', dest='non_grid_smoothness', type=float,
+                        help='Gridless registration smoothing'
+                        )
+
+    parser.add_argument('--optimization_params', dest='optimization_params', type=str,
+                        help='Optimization Parameters',
+                        default='factr:10000.0,pgtol:1e-10,disp:1'
+                        )
+
+    parser.add_argument('--transform_steps', dest='transform_steps', type=int,
+                        help='Compositive transform steps',
+                        default=1
+                        )
+    parser.add_argument('--symmetric', dest='symmetric', action='store_true',
+                        help='Use a symmetric transform',
+                        )
+    parser.add_argument('--optimizer', dest='optimizer', type=str,
+                        help='Optimizer algorithm',
+                        default='lbfgs'
+                        )
+    parser.add_argument('--paired', dest='paired', action='store_true',
+                        help='One scale per resolution'
+                        )
+
+    parser.add_argument('--compositive', dest='compositive', action='store_true',
+                        help='One scale per resolution'
+                        )
+
+    parser.add_argument('--interparticle_distance', dest='interparticle_distance',
+                        type=float,
+                        help='Assumed distance between particles', default=2.
+                        )
+
+    parser.add_argument("--initial", dest="initial_transforms", type=str, nargs='*',
+                        help="")
+
+    #parser.add_argument('--save_every', dest='save_every', type=int,
+    #                    help='save a sample every n steps'
+    #                    )
+
+    args = parser.parse_args()
+    optimization_params = {}
+
+    for s in (
+            'factr:10000.0,pgtol:1e-10,disp:1,' +
+            args.optimization_params
+    ).split(','):
+        x = s.split(':')
+        optimization_params[x[0]] = float(x[1])
+
+    if (args.transform_steps == 1) and (args.symmetric):
+        parser.error("The symmetric mode can only be used with more than 1 transformation step")
+
+    import cPickle
+
+    global registration
+    import registration
+
+    global numpy, linalg
+    import numpy as numpy
+    from scipy import linalg
+    linalg.cholesky_s = linalg.cholesky
+    linalg.cholesky = lambda a: linalg.cholesky_s(a, lower=True)
+
+    from airway_tools import io
+
+    moving = io.read_airway(args.moving, dist=args.interparticle_distance)
+    reference = io.read_airway(args.reference, dist=args.interparticle_distance)
+
+    if args.initial_transforms:
+        initial_transforms = sum((cPickle.load(open(t)) for t in args.initial_transforms), [])
+        moving = io.transform_airway(moving, initial_transforms)
+
+    mode = 'tensors'
+    if args.currents:
+        mode = 'currents'
+    elif args.gmm:
+        mode = 'gmm'
+    if args.total_scale:
+        mode = 'total_' + mode
+
+    metric_factory = registration_metric_factory(mode)
+
+    args.affine_scales = numpy.atleast_1d(args.affine_scales)
+    args.spline_resolutions = numpy.atleast_1d(args.spline_resolutions)
+    args.spline_smoothnesses = numpy.atleast_1d(args.spline_smoothnesses)
+
+    affine_warped_airway = io.Airway(
+        moving.points.copy(),
+        moving.tensors.copy(),
+        moving.vectors.copy(),
+        moving.data
+    )
+    if args.affine:
+        affine_transforms = affine_registration_general(
+            reference,
+            moving,
+            args.affine_scales,
+            optimizer_factory(args.optimizer, optimization_params),
+            metric_factory,
+        )
+
+        cPickle.dump(affine_transforms, open(args.output_prefix + '_affine.pck', 'wb'))
+
+        for transform in affine_transforms:
+            affine_warped_airway = io.Airway(
+                transform.transform_points(affine_warped_airway.points),
+                transform.transform_tensors(affine_warped_airway.points, affine_warped_airway.tensors),
+                transform.transform_vectors(affine_warped_airway.points, affine_warped_airway.vectors),
+                affine_warped_airway.data
+            )
+
+        io.save_airway(
+            args.output_prefix + '_affine.vtk',
+            affine_warped_airway,
+        )
+
+    if args.deformable:
+        transforms = generate_deformable_transforms(
+            reference, affine_warped_airway,
+            args.spline_resolutions, args.spline_smoothnesses, args.transform_steps,
+            args.grid_points, args.non_grid_points_smoothness,
+            args.grid, args.non_grid_smoothness, compositive=args.compositive
+        )
+
+        if len(args.deformable_regularization) > 0:
+            print args.deformable_regularization
+            if len(args.deformable_regularization) == 1:
+                args.deformable_regularization *= len(transforms)
+            elif len(args.deformable_regularization) != len(transforms):
+                raise ValueError(
+                    "Number of regularization parameters must be either 1 "
+                    "or the number of transforms"
+                )
+            regularizer = [
+                registration.BendingEnergyKernelBasedTransform(transform, weight)
+                for weight, transform in izip(
+                    args.deformable_regularization,
+                    transforms
+                )
+            ]
+        else:
+            regularizer = None
+
+        if args.symmetric and args.compositive:
+            raise ValueError("Symmetric compositive transform not implemented")
+
+        deformable_transforms = deformable_registration_general(
+            reference,
+            affine_warped_airway,
+            args.deformable_scales,
+            transforms,
+            optimizer_factory(args.optimizer, optimization_params),
+            regularizer,
+            metric_factory,
+            total_scale=args.total_scale,
+            paired=args.paired,
+            symmetric=args.symmetric
+        )
+
+        warped_airway = deepcopy(affine_warped_airway)
+
+        for transform in deformable_transforms:
+            warped_airway = io.Airway(
+                transform.transform_points(warped_airway.points),
+                transform.transform_tensors(warped_airway.points, warped_airway.tensors),
+                transform.transform_vectors(warped_airway.points, warped_airway.vectors),
+                warped_airway.data
+            )
+
+        io.save_airway(
+            args.output_prefix + '_deformable.vtk',
+            warped_airway
+        )
+
+        cPickle.dump(deformable_transforms, open(args.output_prefix + '_deformable.pck', 'wb'))
+
+
+def optimizer_factory(algorithm, optimization_params):
+    if algorithm == 'lbfgs':
+        lbfgs_params = [
+            'disp',
+            'iprint',
+            'maxcor',
+            'ftol',
+            'gtol',
+            'eps',
+            'maxfun',
+            'maxiter',
+            'maxtime',
+            'callback',
+            'factr',
+            'pgtol',
+        ]
+        for param in optimization_params.keys():
+            if param not in lbfgs_params:
+                warn("Parameter %s not in lbfgs" % param)
+                del optimization_params[param]
+        lbfgs_params = []
+        return lambda *args: registration.ModifiedLBFGS(optimizer_args=optimization_params)
+    else:
+        params = optimization_params.copy()
+        del params['pgtol']
+        del params['factr']
+        del params['disp']
+
+        class Callback:
+            def __init__(self):
+                self.counter = 0
+
+            def __call__(self, f, g):
+                if g.size > 0:
+                    gtext = "grad norm = %g" % float(linalg.norm(g))
+                else:
+                    gtext = ""
+                print ("evaluation %d: f = %g, " + gtext) % (self.counter, float(f))
+                self.counter += 1
+
+        return lambda *args: registration.NLOpt(
+            optimize_algorithm=algorithm, optimizer_args=params,
+            callback=Callback()
+        )
+
+
+def affine_registration_general(
+    reference_airway, moving_airway, scales, optimizer, metric_factory, initialize_with_center_of_mass=True
+):
+    center_reference = reference_airway.points.mean(0)
+    center_moving = moving_airway.points.mean(0)
+
+    metric = [
+        metric_factory(reference_airway, moving_airway, scale)
+        for scale in scales
+    ]
+
+    affines = [
+        registration.Translation(),
+        registration.Rigid(center_reference),
+        registration.Affine(center_reference)
+    ]
+
+    if initialize_with_center_of_mass:
+        affines[0].initial = affines[0].identity.copy()
+        affines[0].initial[:] = center_reference - center_moving
+
+    reg_affine = registration.Registration(
+        metric=metric,
+        model=affines,
+        optimizer=optimizer()
+    )
+
+    tensors = None
+    vectors = None
+    if hasattr(metric[0], 'tensors') and tensors is not None:
+        tensors = moving_airway.tensors
+    if hasattr(metric[0], 'vectors') and vectors is not None:
+        vectors = moving_airway.vectors
+
+    reg_affine.register(moving_airway.points, tensors=tensors, vectors=vectors)
+
+    return reg_affine.model
+
+
+def registration_metric_factory(mode):
+    from registration import metric
+
+    mode = mode.lower()
+    if mode == 'tensors':
+        def tensor_metric(reference_airway, moving_airway, scale, *args, **kwargs):
+            return metric.TensorPatchParticlesFrobenius2(
+                moving_airway.points, moving_airway.tensors, scale,
+                reference_airway.points, reference_airway.tensors, scale,
+                *args, **kwargs
+            )
+        return tensor_metric
+    if mode == 'total_tensors':
+        def total_tensor_metric(reference_airway, moving_airway, scale, *args, **kwargs):
+            return metric.TensorPatchTotalScaleParticlesFrobenius2(
+                moving_airway.points, moving_airway.tensors,
+                reference_airway.points, reference_airway.tensors, *args,
+                sigma=scale, **kwargs
+            )
+        return total_tensor_metric
+    elif mode == 'currents':
+        def currents_metric(reference_airway, moving_airway, scale, *args, **kwargs):
+            from airway_tools.util import reorient_airway
+            reference_airway = reorient_airway(reference_airway)
+            moving_airway = reorient_airway(moving_airway)
+            return metric.VectorPatchParticlesL2(
+                moving_airway.points, moving_airway.vectors, scale,
+                reference_airway.points, reference_airway.vectors, scale,
+                *args, **kwargs
+            )
+        return currents_metric
+    elif mode == 'gmm':
+        def gmm_metric(reference_airway, moving_airway, scale, *args, **kwargs):
+            return metric.SquaredDifference(
+                moving_airway.points, reference_airway.points, scale,
+                *args, **kwargs
+            )
+        return gmm_metric
+    else:
+        raise NotImplementedError('Model %s not implemented' % mode)
+
+
+def deformable_registration_general(
+    reference_airway, moving_airway, scales,
+    transforms, optimizer, regularizer, metric_factory,
+    optimization_params={}, total_scale=False, paired=False, symmetric=False
+):
+    import registration
+    all_points = numpy.vstack((reference_airway.points, moving_airway.points))
+
+    max_frobenius_norm = max((
+        numpy.linalg.norm(t) for t in chain(reference_airway.tensors, moving_airway.tensors)
+    ))
+
+    bounding_box = numpy.c_[[
+        all_points.min(0) - max_frobenius_norm,
+        all_points.max(0) + max_frobenius_norm
+    ]].T
+
+    print "Deltas: ", bounding_box[:, 1] - bounding_box[:, 0]
+
+    print "Starting Deformable registration:"
+
+    if total_scale:
+        if len(scales) > 1:
+            raise ValueError("Total Scale can only be used with one scale")
+        print "\t Using total scale ", scales[0]
+    else:
+        print "\t Using scales ", scales
+    if symmetric:
+        metric = [
+            registration.metric.AdditiveMetric([
+                metric_factory(reference_airway, moving_airway, scale),
+                metric_factory(moving_airway, reference_airway, scale),
+            ], [1., 1.], [False, True])
+            for scale in scales
+        ]
+    else:
+        metric = [
+            metric_factory(reference_airway, moving_airway, scale)
+            for scale in scales
+        ]
+
+    for i, transform in enumerate(transforms):
+        print "Transform %0d: number of parameters %04d" % (i, len(transform.identity))
+
+    reg = registration.Registration(
+        metric=metric,
+        model=transforms,
+        regularizer=regularizer,
+        optimizer=optimizer(),
+        paired=paired
+    )
+
+    reg.register(moving_airway.points, tensor=moving_airway.tensors)
+
+    return reg.model
+
+
+def generate_deformable_transforms(
+    reference_airway, moving_airway,
+    spline_resolutions, spline_smoothnesses, transform_steps,
+    only_grid_points_transform=True, non_grid_points_smoothness=None,
+    only_grid_transform=True, non_grid_smoothness=None, compositive=False
+):
+    from registration import model
+    all_points = numpy.vstack((reference_airway.points, moving_airway.points))
+
+    max_frobenius_norm = max((
+        numpy.linalg.norm(t) for t in chain(reference_airway.tensors, moving_airway.tensors)
+    ))
+
+    bounding_box = numpy.c_[[
+        all_points.min(0) - max_frobenius_norm,
+        all_points.max(0) + max_frobenius_norm
+    ]].T
+
+    print "Deltas: ", bounding_box[:, 1] - bounding_box[:, 0]
+
+    print "Deformable registration transforms:"
+    print "\t Resolution factors: ", spline_resolutions
+    print "\t Smoothing factors: ", spline_smoothnesses
+    grids = [
+        model.grid_from_bounding_box_and_resolution(
+            bounding_box,
+            resolution
+        )
+        for resolution in spline_resolutions
+    ]
+
+    for i, grid in enumerate(grids):
+        print "Grid %0d: number of control points %04d" % (i, len(grid))
+
+    if transform_steps > 1:
+        if not compositive:
+            transforms = [
+                model.DiffeomorphicTransformScalingSquaring(
+                    registration.KernelBasedTransformNoBasisMovingAnchors,
+                    transform_steps,
+                    False,
+                    grid,
+                    model.InverseExp3DKernel(smoothness),
+                )
+                for grid, smoothness in izip(grids, spline_smoothnesses)
+            ]
+        else:
+            transforms = [
+                model.CompositiveStepTransform(
+                    registration.KernelBasedTransformNoBasisMovingAnchors,
+                    transform_steps,
+                    grid,
+                    model.InverseExp3DKernel(smoothness),
+                )
+                for grid, smoothness in izip(grids, spline_smoothnesses)
+            ]
+
+    else:
+        transforms = [
+            model.KernelBasedTransformNoBasisMovingAnchors(
+                grid,
+                model.InverseExp3DKernel(smoothness),
+            )
+            for grid, smoothness in izip(grids, spline_smoothnesses)
+        ]
+
+    if not only_grid_points_transform:
+        from scipy.spatial.distance import pdist
+        min_dist = pdist(moving_airway.points).min()
+        print "Non-gridded transform, %04d control points, smoothness %0.2g" % (len(moving_airway.points), non_grid_points_smoothness)
+
+        if transform_steps > 1:
+            transform = model.DiffeomorphicTransformScalingSquaring(
+                registration.KernelBasedTransformNoBasisMovingAnchors,
+                transform_steps,
+                False,
+                all_points.copy(),
+                model.InverseExp3DKernel(non_grid_points_smoothness),
+            )
+        else:
+            transform = registration.KernelBasedTransformNoBasisMovingAnchors(
+                moving_airway.points.copy(),
+                model.InverseExp3DKernel(non_grid_points_smoothness),
+            )
+
+        transforms.append(transform)
+
+    if not only_grid_transform:
+        from scipy.spatial.distance import pdist
+        min_dist = pdist(moving_airway.points).min()
+        delta = min_dist / 3.
+        grid = numpy.vstack([
+            all_points + displacement
+            for displacement in (
+                numpy.vstack([numpy.eye(3), -numpy.eye(3)]) * delta
+            )
+        ])
+
+        print "Non-gridded transform, %04d control points, smoothness %0.2g" % (len(grid), non_grid_smoothness)
+
+        if transform_steps > 1:
+            transform = model.DiffeomorphicTransformScalingSquaring(
+                registration.KernelBasedTransformNoBasisMovingAnchors,
+                transform_steps,
+                False,
+                grid,
+                model.InverseExp3DKernel(non_grid_smoothness),
+            )
+        else:
+            transform = registration.KernelBasedTransformNoBasisMovingAnchors(
+                grid,
+                model.InverseExp3DKernel(non_grid_smoothness),
+            )
+
+        transforms.append(transform)
+
+    return transforms
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit()
