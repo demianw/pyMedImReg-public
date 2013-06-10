@@ -1,6 +1,8 @@
 from .. import metric
 from ..metric import _metrics
 
+import inspect
+
 import numpy
 from numpy import testing
 
@@ -40,27 +42,40 @@ def setup_metrics(N=10, noise=1e-4, random=numpy.random.RandomState(0)):
         numpy.ones_like(points_fixed) +
         numpy.random.randn(*points_fixed.shape) * noise
     )
+    excluded_metrics = ['Metric', 'AdditiveMetric']
+    metrics_to_test = []
+    for m in metric.__all__:
+        class_ = getattr(metric, m)
 
-    # metrics_to_test = ['DiffeomorphicTransformScalingSquaring']  #
-    # metric.__all__
-    metrics_to_test = [
-        'SquaredDifference', 'TensorPatchParticlesFrobenius2',
-        'TensorPatchTotalScaleParticlesFrobenius2'
-    ]
+        if (
+            inspect.isclass(class_) and
+            issubclass(class_, metric.Metric) and
+            m not in excluded_metrics and
+            not hasattr(class_, 'skip_from_tests')
+        ):
+            metrics_to_test.append(m)
+        elif hasattr(class_, 'skip_from_tests'):
+            print "Metric %s signaled to be skipped" % m
+
     initialization = {
         'default': (tuple(), dict()),
         'SquaredDifference': (
             (lambda x: (x, x, 1))(random.randn(N, 3)),
             {}
         ),
-        'TensorPatchParticlesFrobenius2': (
-            (lambda x, y, s: (x, y, s,  x, y, s))(
-                random.randn(N, 3), random_tensors(N), 1.),
+        'Correlation': (
+            (
+                points,
+                points_fixed,
+                1.
+            ),
             {}
         ),
-        'TensorPatchTotalScaleParticlesFrobenius2': (
-            (lambda x, y, s: (x, y, x, y, s))(
-                random.randn(N, 3), random_tensors(N), 1.),
+        'ExactLandmarkL2': (
+            (
+                points,
+                points_fixed,
+            ),
             {}
         ),
         'VectorPatchParticlesL2': (
@@ -74,6 +89,7 @@ def setup_metrics(N=10, noise=1e-4, random=numpy.random.RandomState(0)):
             ),
             {}
         ),
+
     }
 
 
@@ -117,7 +133,7 @@ def test_metric_tensor_gradients_one_parameter(sigma_noise=1):
         metric_ = get_metric_class(metric_name)(
             *metric_initialization[0], **metric_initialization[1])
 
-        if metric_.tensors is not None:
+        if hasattr(metric_, 'tensors') and metric_.tensors is not None:
             yield metric_gradient_tensors, metric_name, metric_initialization
             yield metric_gradient_tensors, metric_name, metric_initialization, sigma_noise
 
@@ -127,8 +143,14 @@ def metric_gradient_pos(metric_name, metric_initialization, sigma_noise=0, eps=1
         *metric_initialization[0], **metric_initialization[1])
     points_moving = metric_.points_fixed.copy() + sigma_noise * numpy.random.randn(
         *metric_.points_fixed.shape)
-    moving_vectors = metric_.vectors
-    moving_tensors = metric_.tensors
+    if hasattr(metric_, 'vectors'):
+        moving_vectors = metric_.vectors
+    else:
+        moving_vectors = None
+    if hasattr(metric_, 'tensors'):
+        moving_tensors = metric_.tensors
+    else:
+        moving_tensors = None
 
     f_pos = lambda x: metric_.metric_gradient(x.reshape(len(
         x) / 3, 3), vectors=moving_vectors, tensors=moving_tensors)[0]

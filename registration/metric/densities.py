@@ -2,6 +2,8 @@ from _metrics import gauss_transform
 from .basis import Metric
 import numpy
 
+from ..decorator import skip_from_test
+
 __all__ = ['SquaredDifference', 'Correlation', 'CorrelationWithTensorFeatures']
 
 
@@ -102,6 +104,7 @@ class Correlation(Metric):
         return f, grad
 
 
+@skip_from_test
 class CorrelationWithTensorFeatures(Metric):
     def __init__(self,  points_moving, tensors_moving, points_fixed, tensors_fixed, sigma, transform=None):
         self.points_fixed = numpy.require(points_fixed, requirements='C', dtype=numpy.float64)

@@ -1,4 +1,5 @@
 from itertools import izip
+from ..decorator import skip_from_test
 
 import numpy
 from scipy import ndimage
@@ -450,6 +451,7 @@ class LagrangeConstrained(Metric):
         return f, grad
 
 
+@skip_from_test
 class RosenGradientProjection(Metric):
     def __init__(self, metric_to_project, projection_function, transform=None, points_moving=None):
         self.transform = transform
@@ -481,6 +483,7 @@ class RosenGradientProjection(Metric):
         self.one_dimensional_search = False
 
 
+@skip_from_test
 class ImageMeanSquares(Metric):
     def __init__(self, points_fixed, transform=None, points_moving=None, fixed_points=None,
                  gradient_operator=numpy.gradient, interpolator=ndimage.map_coordinates
@@ -533,6 +536,7 @@ class ImageMeanSquares(Metric):
         return metric, grad
 
 
+@skip_from_test
 class VectorImageMeanSquares(Metric):
     def __init__(self, points_fixed, transform=None, points_moving=None, fixed_points=None,
                  gradient_operator=numpy.gradient, interpolator=ndimage.map_coordinates,
