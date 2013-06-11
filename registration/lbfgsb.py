@@ -8,30 +8,30 @@ Functions
 
 """
 
-## License for the Python wrapper
-## ==============================
+# License for the Python wrapper
+# ==============================
 
-## Copyright (c) 2004 David M. Cooke <cookedm@physics.mcmaster.ca>
+# Copyright (c) 2004 David M. Cooke <cookedm@physics.mcmaster.ca>
 
-## Permission is hereby granted, free of charge, to any person obtaining a copy of
-## this software and associated documentation files (the "Software"), to deal in
-## the Software without restriction, including without limitation the rights to
-## use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-## of the Software, and to permit persons to whom the Software is furnished to do
-## so, subject to the following conditions:
+# Permission is hereby granted, free of charge, to any person obtaining a copy of
+# this software and associated documentation files (the "Software"), to deal in
+# the Software without restriction, including without limitation the rights to
+# use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+# of the Software, and to permit persons to whom the Software is furnished to do
+# so, subject to the following conditions:
 
-## The above copyright notice and this permission notice shall be included in all
-## copies or substantial portions of the Software.
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
 
-## THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-## IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-## FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-## AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-## LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-## OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-## SOFTWARE.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
-## Modifications by Travis Oliphant and Enthought, Inc.  for inclusion in SciPy
+# Modifications by Travis Oliphant and Enthought, Inc.  for inclusion in SciPy
 
 import warnings
 import time
@@ -39,10 +39,60 @@ import time
 import numpy as np
 from numpy import array, asarray, float64, int32, zeros
 from scipy.optimize import _lbfgsb
-from scipy.optimize import approx_fprime, Result #, _check_unknown_options, MemoizeJac
+from scipy.optimize import approx_fprime  # , Result , _check_unknown_options, MemoizeJac
 from numpy.compat import asbytes
 
 __all__ = ['fmin_l_bfgs_b']
+
+
+class Result(dict):
+
+    """ Represents the optimization result.
+
+    Attributes
+    ----------
+    x : ndarray
+        The solution of the optimization.
+    success : bool
+        Whether or not the optimizer exited successfully.
+    status : int
+        Termination status of the optimizer. Its value depends on the
+        underlying solver. Refer to `message` for details.
+    message : str
+        Description of the cause of the termination.
+    fun, jac, hess : ndarray
+        Values of objective function, Jacobian and Hessian (if available).
+    nfev, njev, nhev : int
+        Number of evaluations of the objective functions and of its
+        Jacobian and Hessian.
+    nit : int
+        Number of iterations performed by the optimizer.
+    maxcv : float
+        The maximum constraint violation.
+
+    Notes
+    -----
+    There may be additional attributes not listed above depending of the
+    specific solver. Since this class is essentially a subclass of dict
+    with attribute accessors, one can see which attributes are available
+    using the `keys()` method.
+    """
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        if self.keys():
+            m = max(map(len, list(self.keys()))) + 1
+            return '\n'.join([k.rjust(m) + ': ' + repr(v)
+                              for k, v in self.items()])
+        else:
+            return self.__class__.__name__ + "()"
 
 
 class OptimizeWarning(UserWarning):
@@ -59,6 +109,7 @@ def _check_unknown_options(unknown_options):
 
 
 class MemoizeJac(object):
+
     """ Decorator that caches the value gradient of function each time it
     is called. """
     def __init__(self, fun):
@@ -207,28 +258,29 @@ def fmin_l_bfgs_b(func, x0, fprime=None, args=(),
     # build options
     if disp is None:
         disp = iprint
-    opts = {'disp'  : disp,
+    opts = {'disp': disp,
             'iprint': iprint,
             'maxcor': m,
-            'ftol'  : factr * np.finfo(float).eps,
-            'gtol'  : pgtol,
-            'eps'   : epsilon,
+            'ftol': factr * np.finfo(float).eps,
+            'gtol': pgtol,
+            'eps': epsilon,
             'maxfun': maxfun,
             'maxiter': maxiter,
             'maxtime': maxtime,
-            'callback': callback }
+            'callback': callback}
 
     res = _minimize_lbfgsb(fun, x0, args=args, jac=jac, bounds=bounds,
                            **opts)
     d = {'grad': res['jac'],
          'task': res['message'],
          'funcalls': res['nfev'],
-         'nit' : res['nit'],
+         'nit': res['nit'],
          'warnflag': res['status']}
     f = res['fun']
     x = res['x']
 
     return x, f, d
+
 
 def _minimize_lbfgsb(fun, x0, args=(), jac=None, bounds=None,
                      disp=None, maxcor=10, ftol=2.2204460492503131e-09,
@@ -279,7 +331,7 @@ def _minimize_lbfgsb(fun, x0, args=(), jac=None, bounds=None,
     n, = x0.shape
 
     if bounds is None:
-        bounds = [(None,None)] * n
+        bounds = [(None, None)] * n
     if len(bounds) != n:
         raise ValueError('length of x0 != length of bounds')
 
@@ -303,12 +355,14 @@ def _minimize_lbfgsb(fun, x0, args=(), jac=None, bounds=None,
     nbd = zeros(n, int32)
     low_bnd = zeros(n, float64)
     upper_bnd = zeros(n, float64)
-    bounds_map = {(None, None): 0,
-              (1, None) : 1,
-              (1, 1) : 2,
-              (None, 1) : 3}
+    bounds_map = {
+        (None, None): 0,
+        (1, None): 1,
+        (1, 1): 2,
+        (None, 1): 3
+    }
     for i in range(0, n):
-        l,u = bounds[i]
+        l, u = bounds[i]
         if l is not None:
             low_bnd[i] = l
             l = 1
@@ -320,10 +374,10 @@ def _minimize_lbfgsb(fun, x0, args=(), jac=None, bounds=None,
     x = array(x0, float64)
     f = array(0.0, float64)
     g = zeros((n,), float64)
-    wa = zeros(2*m*n + 5*n + 11*m*m + 8*m, float64)
-    iwa = zeros(3*n, int32)
+    wa = zeros(2 * m * n + 5 * n + 11 * m * m + 8 * m, float64)
+    iwa = zeros(3 * n, int32)
     task = zeros(1, 'S60')
-    csave = zeros(1,'S60')
+    csave = zeros(1, 'S60')
     lsave = zeros(4, int32)
     isave = zeros(44, int32)
     dsave = zeros(29, float64)
@@ -342,7 +396,8 @@ def _minimize_lbfgsb(fun, x0, args=(), jac=None, bounds=None,
         task_str = task.tostring()
         if task_str.startswith(asbytes('FG')):
             if n_function_evals > maxfun:
-                task[:] = 'STOP: TOTAL NO. of f AND g EVALUATIONS EXCEEDS LIMIT'
+                task[
+                    :] = 'STOP: TOTAL NO. of f AND g EVALUATIONS EXCEEDS LIMIT'
             else:
                 # minimization routine wants f and g at the current x
                 n_function_evals += 1
@@ -373,40 +428,42 @@ def _minimize_lbfgsb(fun, x0, args=(), jac=None, bounds=None,
 
     return Result(fun=f, jac=g, nfev=n_function_evals, nit=n_iterations,
                   status=warnflag, message=task_str, x=x,
-                  success=(warnflag==0))
+                  success=(warnflag == 0))
 
 if __name__ == '__main__':
     def func(x):
-        f = 0.25*(x[0]-1)**2
+        f = 0.25 * (x[0] - 1) ** 2
         for i in range(1, x.shape[0]):
-            f += (x[i] - x[i-1]**2)**2
+            f += (x[i] - x[i - 1] ** 2) ** 2
         f *= 4
         return f
+
     def grad(x):
         g = zeros(x.shape, float64)
-        t1 = x[1] - x[0]**2
-        g[0] = 2*(x[0]-1) - 16*x[0]*t1
-        for i in range(1, g.shape[0]-1):
+        t1 = x[1] - x[0] ** 2
+        g[0] = 2 * (x[0] - 1) - 16 * x[0] * t1
+        for i in range(1, g.shape[0] - 1):
             t2 = t1
-            t1 = x[i+1] - x[i]**2
-            g[i] = 8*t2 - 16*x[i]*t1
-        g[-1] = 8*t1
+            t1 = x[i + 1] - x[i] ** 2
+            g[i] = 8 * t2 - 16 * x[i] * t1
+        g[-1] = 8 * t1
         return g
+
     def func_and_grad(x):
         return func(x), grad(x)
 
-
     class Problem(object):
+
         def fun(self, x):
             return func_and_grad(x)
 
     factr = 1e7
     pgtol = 1e-5
 
-    n=25
-    m=10
+    n = 25
+    m = 10
 
-    bounds = [(None,None)] * n
+    bounds = [(None, None)] * n
     for i in range(0, n, 2):
         bounds[i] = (1.0, 100)
     for i in range(1, n, 2):
