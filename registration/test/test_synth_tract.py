@@ -8,7 +8,7 @@ from numpy.random import RandomState
 from numpy import testing
 from scipy import linalg
 from .. import Registration, Correlation, RegistrationError, LieAlgebraLogEucSteepestGradientDescent, VectorImageMeanSquares
-from .. import currents
+#from .. import currents
 import registration.model.linear
 import registration.model.poly_linear
 

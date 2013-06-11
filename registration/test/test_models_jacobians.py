@@ -90,12 +90,9 @@ def setup_transforms():
         ),
         'DiffeomorphicTransformScalingSquaring': (
             (
-                model.KernelBasedTransform,
+                model.Rigid,
                 8,
                 False,
-                model.grid_from_bounding_box_and_resolution(
-                    numpy.c_[[-1, -1, -1], [1, 1, 1]], 2),
-                model.InverseExp3DKernel(.5)
             ),
             {}
         ),
