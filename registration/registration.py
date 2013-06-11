@@ -8,16 +8,22 @@ from .optimizer import ScipyLBFGS
 __all__ = ['Registration', 'RegistrationError']
 
 
+def assert_iterable(obj):
+    if not isinstance(obj, Iterable):
+        return (obj,)
+    else:
+        return obj
+
+
 class Registration(object):
-    def __init__(self, model=None, metric=None, regularizer=None, optimizer=None, transform_target=None, paired=False, regularizer_constraint=None):
-        if not isinstance(metric, Iterable):
-            metric = (metric,)
+    def __init__(
+            self, model=None, metric=None, regularizer=None, optimizer=None,
+            transform_target=None, paired=False, regularizer_constraint=None
+    ):
+        metric = assert_iterable(metric)
+        model = assert_iterable(model)
+        regularizer = assert_iterable(regularizer)
 
-        if not isinstance(model, Iterable):
-            model = (model,)
-
-        if not isinstance(regularizer, Iterable):
-            regularizer = (regularizer,)
         if len(regularizer) != len(model):
             if len(regularizer) == 1:
                 regularizer = (regularizer[0],) * len(model)
@@ -29,6 +35,7 @@ class Registration(object):
 
         self.regularizer_constraint = regularizer_constraint
         self.paired = paired
+
         if self.paired and (len(model) != len(metric)):
             raise ValueError("Paired mode requires the same number of models and metrics")
 
@@ -49,50 +56,62 @@ class Registration(object):
     def register(self, points, vectors=None, tensors=None, return_all=False, **kwargs):
 
         if not self.paired:
-            for model_num, model, regularizer in izip(xrange(len(self.model)), self.model, self.regularizer):
-                if not hasattr(model, 'initial'):
-                    initial = model.identity
-                else:
-                    initial = model.initial
-
-                self.optimizer.initial = initial
-                self.optimizer.bounds = model.bounds
-                self.result = []
-                for metric_num, metric in enumerate(self.metric):
-                    initial = self.registration_inner_loop(
-                        points, vectors, tensors,
-                        model, regularizer, metric,
-                        model_num, metric_num, initial
-                    )
-
-                model.registration_optimizer_result = self.optimizer.result
-                points = model.transform_points(points)
-                if vectors is not None:
-                    vectors = model.transform_vectors(points, vectors)
-                if tensors is not None:
-                    tensors = model.transform_tensors(points, tensors)
+            vectors, tensors, points = self.register_paired(points, vectors, tensors)
         else:
-            for step_num, model, regularizer, metric in izip(xrange(len(self.model)), self.model, self.regularizer, self.metric):
-                if not hasattr(model, 'initial'):
-                    initial = model.identity
-                else:
-                    initial = model.initial
+            self.register_sequential(vectors, tensors, points)
 
-                self.optimizer.initial = initial
-                self.optimizer.bounds = model.bounds
-                self.result = []
+    def register_sequential(self, vectors, tensors, points):
+        for step_num, model, regularizer, metric in izip(
+                xrange(len(self.model)), self.model,
+                self.regularizer, self.metric
+        ):
+            if not hasattr(model, 'initial'):
+                initial = model.identity
+            else:
+                initial = model.initial
+
+            self.optimizer.initial = initial
+            self.optimizer.bounds = model.bounds
+            self.result = []
+            initial = self.registration_inner_loop(
+                points, vectors, tensors,
+                model, regularizer, metric,
+                step_num, step_num, initial
+            )
+
+            model.registration_optimizer_result = self.optimizer.result
+            points = model.transform_points(points)
+            if vectors is not None:
+                vectors = model.transform_vectors(points, vectors)
+            if tensors is not None:
+                tensors = model.transform_tensors(points, tensors)
+
+    def register_paired(self, points, vectors, tensors):
+        for model_num, model, regularizer in izip(
+                xrange(len(self.model)), self.model, self.regularizer
+        ):
+            if not hasattr(model, 'initial'):
+                initial = model.identity
+            else:
+                initial = model.initial
+
+            self.optimizer.initial = initial
+            self.optimizer.bounds = model.bounds
+            self.result = []
+            for metric_num, metric in enumerate(self.metric):
                 initial = self.registration_inner_loop(
                     points, vectors, tensors,
                     model, regularizer, metric,
-                    step_num, step_num, initial
+                    model_num, metric_num, initial
                 )
 
-                model.registration_optimizer_result = self.optimizer.result
-                points = model.transform_points(points)
-                if vectors is not None:
-                    vectors = model.transform_vectors(points, vectors)
-                if tensors is not None:
-                    tensors = model.transform_tensors(points, tensors)
+            model.registration_optimizer_result = self.optimizer.result
+            points = model.transform_points(points)
+            if vectors is not None:
+                vectors = model.transform_vectors(points, vectors)
+            if tensors is not None:
+                tensors = model.transform_tensors(points, tensors)
+        return vectors, tensors, points
 
     def registration_inner_loop(self, points, vectors, tensors, model, regularizer, metric, model_num, metric_num, initial):
         metric.points_moving = numpy.ascontiguousarray(points)
@@ -130,6 +149,7 @@ class Registration(object):
         self.result.append(self.optimizer.result)
         print "\nEnd optimization: ", self.optimizer.optimized_cost
         return initial
+
 
 class RegistrationError(Exception):
     def __init__(self, value):
