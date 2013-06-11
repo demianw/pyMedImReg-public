@@ -3,19 +3,14 @@ from itertools import izip
 import cPickle
 from unittest import skip
 
-import matplotlib
-
-from pylab import *
 from numpy import *
 from numpy.random import RandomState
 from numpy import testing
 from scipy import linalg
-from .. import model, Registration, Correlation, RegistrationError, LieAlgebraLogEucSteepestGradientDescent, VectorImageMeanSquares
+from .. import Registration, Correlation, RegistrationError, LieAlgebraLogEucSteepestGradientDescent, VectorImageMeanSquares
 from .. import currents
 import registration.model.linear
 import registration.model.poly_linear
-
-matplotlib.use('pdf')
 
 _multiprocess_can_split_ = True
 random_ = RandomState(0)
