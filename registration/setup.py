@@ -26,8 +26,6 @@ def configuration(parent_package='', top_path=None):
             pass
     config.add_subpackage('metric')
     config.add_subpackage('model')
-    config.add_subpackage('surface_sampling')
-    #config.add_subpackage('nlopt')
 
     return config
 
