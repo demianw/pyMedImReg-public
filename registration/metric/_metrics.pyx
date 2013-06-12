@@ -62,8 +62,9 @@ def gauss_transform(
     openmp.omp_init_lock(&lock)
 
     for i in prange(n, nogil=True):
+
+        dist_ij = <DTYPE_t*> malloc(sizeof(DTYPE_t))
         for j in range(m):
-            dist_ij = <DTYPE_t*> malloc(sizeof(DTYPE_t))
             dist_ij[0] = 0
             for d in range(dim):
                 dist_ij[0] += (f[i, d] - g[j, d]) ** 2
