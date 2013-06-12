@@ -54,7 +54,7 @@ class InexactLandmarkL2(Metric):
     .. math::
         m(X, Y) = \sum_{i \leq N} (X_i - Y_i)^T \Sigma^{-1}_i (X_i - Y_i)
 
-        \nabla_{X_i} m(X, Y) = (X_i - Y_i) (\Sigma_i^{-1} + {\Sigma_i^{-1}}^T)
+        \nabla_{X_i} m(X, Y) = 2(X_i - Y_i)^T \Sigma_i^{-1}
     '''
     def __init__(self, points_moving, points_fixed, covariances_fixed, transform=None):
         super(InexactLandmarkL2, self).__init__(points_moving, transform=transform)

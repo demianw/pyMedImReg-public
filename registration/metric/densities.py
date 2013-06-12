@@ -8,6 +8,22 @@ __all__ = ['SquaredDifference', 'Correlation', 'CorrelationWithTensorFeatures']
 
 
 class SquaredDifference(Metric):
+    r"""
+    L2 metric between fixed variance Gaussian mixtures:
+    Let :math:`Y\in \Re^{N\times 3}` be the fixed set of points and :math:`X\in\Re^{M\times 3}` the
+    moving set of points. Then the metric is
+
+    .. math::
+        m(X, Y) = \|X - Y\|^2 = \|X\|^2 + \|Y\|^2 - 2 \langle X, Y \rangle
+
+    where
+
+    .. math::
+        \langle X, Y\rangle =  \frac 1 {2\pi\sigma^2}\sum_{ij} \int
+        e^{-.5 \left(\frac {X_i-\eta} \sigma\right)^2}  e^{-.5 \left(\frac {Y_j-\eta} \sigma\right)^2} d\eta
+
+        \|X\|^2 = \langle X, X \rangle
+    """
     def __init__(self, points_moving, points_fixed, sigma, transform=None):
         super(SquaredDifference, self).__init__(points_moving, transform=transform)
         self.points_fixed = numpy.ascontiguousarray(points_fixed, dtype=numpy.float64)
@@ -39,12 +55,16 @@ class SquaredDifference(Metric):
 
 class Correlation(Metric):
     r"""
-    Fixed variance correlation metric:
+    Correlation metric between fixed variance Gaussian mixtures:
     Let :math:`Y\in \Re^{N\times 3}` be the fixed set of points and :math:`X\in\Re^{M\times 3}` the
     moving set of points. Then the metric is
 
     .. math::
         m(X, Y) = -\frac{\langle X, Y \rangle^2} {\|X\|^2\|Y\|^2} \propto -\frac{\langle X, Y \rangle^2} {\|X\|^2}
+
+        \nabla_{X_i} m(X, Y) = 2 \frac{\langle X, Y\rangle}{\|X\|^2}
+        \left(\left(\nabla_{X_i} \|X\|^2\right) \frac{\langle X, Y\rangle}{\|X\|^2}
+        - \nabla_{X_i} \langle X, Y\rangle\right)
 
     where
 

@@ -30,17 +30,16 @@ def random_tensors(n, random=numpy.random.RandomState(0)):
     return r1
 
 
-def setup_metrics(N=10, noise=1e-4, random=numpy.random.RandomState(0)):
+def setup_metrics(N=3, noise=1e-4, random=numpy.random.RandomState(0)):
     global initialization
     global metrics_to_test
-    print "Setting up"
 
-    points = numpy.random.rand(N, 3)
+    points = random.rand(N, 3)
     vectors = numpy.ones_like(points)
-    points_fixed = numpy.random.rand(N, 3)
+    points_fixed = random.rand(N, 3)
     vectors_fixed = (
         numpy.ones_like(points_fixed) +
-        numpy.random.randn(*points_fixed.shape) * noise
+        random.randn(*points_fixed.shape) * noise
     )
     excluded_metrics = ['Metric', 'AdditiveMetric']
     metrics_to_test = []
@@ -64,17 +63,21 @@ def setup_metrics(N=10, noise=1e-4, random=numpy.random.RandomState(0)):
             {}
         ),
         'Correlation': (
-            (
-                points,
-                points_fixed,
-                1.
-            ),
+            (lambda x: (x, x, 1))(random.randn(N, 3)),
             {}
         ),
         'ExactLandmarkL2': (
             (
                 points,
                 points_fixed,
+            ),
+            {}
+        ),
+        'InexactLandmarkL2': (
+            (
+                points,
+                points_fixed,
+                random_tensors(len(points_fixed))
             ),
             {}
         ),
@@ -112,15 +115,8 @@ def test_metric_pos_gradients_one_parameter(sigma_noise=1):
             metric_initialization = initialization[metric_name]
         else:
             metric_initialization = initialization['default']
-        # metric_ = get_metric_class(metric_name)(*metric_initialization[0], **metric_initialization[1])
-        # points_moving = metric_.points_moving
         yield metric_gradient_pos, metric_name, metric_initialization
         yield metric_gradient_pos, metric_name, metric_initialization, sigma_noise
-#        for index in numpy.ndindex(points_moving.shape):
-#            yield metric_gradient_pos, metric_name, index, metric_initialization
-#        for index in numpy.ndindex(points_moving.shape):
-# yield metric_gradient_pos, metric_name, index, metric_initialization,
-# sigma_noise
 
 
 @with_setup(setup=setup_metrics)
@@ -131,37 +127,53 @@ def test_metric_tensor_gradients_one_parameter(sigma_noise=1):
         else:
             metric_initialization = initialization['default']
         metric_ = get_metric_class(metric_name)(
-            *metric_initialization[0], **metric_initialization[1])
+            *metric_initialization[0], **metric_initialization[1]
+        )
 
         if hasattr(metric_, 'tensors') and metric_.tensors is not None:
             yield metric_gradient_tensors, metric_name, metric_initialization
             yield metric_gradient_tensors, metric_name, metric_initialization, sigma_noise
 
 
-def metric_gradient_pos(metric_name, metric_initialization, sigma_noise=0, eps=1e-8):
+def metric_gradient_pos(
+    metric_name, metric_initialization,
+    sigma_noise=0, eps=1e-5, random=numpy.random.RandomState(0)
+):
     metric_ = get_metric_class(metric_name)(
         *metric_initialization[0], **metric_initialization[1])
-    points_moving = metric_.points_fixed.copy() + sigma_noise * numpy.random.randn(
-        *metric_.points_fixed.shape)
+
+    points_moving = (
+        metric_.points_fixed.copy() +
+        sigma_noise * random.randn(*metric_.points_fixed.shape)
+    )
+
     if hasattr(metric_, 'vectors'):
         moving_vectors = metric_.vectors
     else:
         moving_vectors = None
+
     if hasattr(metric_, 'tensors'):
         moving_tensors = metric_.tensors
     else:
         moving_tensors = None
 
-    f_pos = lambda x: metric_.metric_gradient(x.reshape(len(
-        x) / 3, 3), vectors=moving_vectors, tensors=moving_tensors)[0]
-    g_pos = lambda x: metric_.metric_gradient(x.reshape(len(
-        x) / 3, 3), vectors=moving_vectors, tensors=moving_tensors)[1]
+    f_pos = lambda x: metric_.metric_gradient(
+        x.reshape(len(x) / 3, 3),
+        vectors=moving_vectors, tensors=moving_tensors
+    )[0]
 
+    g_pos = lambda x: metric_.metric_gradient(
+        x.reshape(len(x) / 3, 3),
+        vectors=moving_vectors, tensors=moving_tensors
+    )[1]
+
+    grad = g_pos(points_moving.ravel())
     g_approx = approx_fprime(
-        points_moving.ravel(), f_pos, eps).reshape(*points_moving.shape)
+        points_moving.ravel(), f_pos, eps
+    ).reshape(*points_moving.shape)
 
     testing.assert_array_almost_equal(
-        g_pos(points_moving.ravel()), g_approx, decimal=4,
+        grad, g_approx, decimal=4,
         err_msg="Metric %s did not pass the gradient test with displacement %g" % (
             metric_name, sigma_noise
         ), verbose=True
@@ -234,7 +246,7 @@ def _metric_gradient_tensors_centered(metric_name, index, metric_initialization,
     )
 
 
-def test_gauss_transform(N=10, M=10, sigma=1, eps=1e-10, random=numpy.random.RandomState(0)):
+def test_gauss_transform(N=10, M=50, sigma=1, eps=1e-5, random=numpy.random.RandomState(0)):
     points_fixed = random.randn(N, 3)
     points_moving = random.randn(M, 3)
     f = lambda x: _metrics.gauss_transform(x.reshape(
@@ -259,5 +271,3 @@ def test_gauss_transform(N=10, M=10, sigma=1, eps=1e-10, random=numpy.random.Ran
         err_msg="Gauss transform gradient non-centered failed",
         verbose=True
     )
-
-
