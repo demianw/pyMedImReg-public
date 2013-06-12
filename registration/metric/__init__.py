@@ -8,6 +8,6 @@ from .densities import *
 from .landmark import *
 
 __all__ = [
-    'Metric', 'AdditiveMetric', 'Correlation', 'CorrelationWithTensorFeatures', 'ExactLandmarkL2',
+    'Metric', 'AdditiveMetric', 'Correlation', 'CorrelationWithTensorFeatures', 'ExactLandmarkL2', 'InexactLandmarkL2',
     'ImageMeanSquares', 'VectorImageMeanSquares', 'RosenGradientProjection', 'SquaredDifference', 'Correlation',
 ]
