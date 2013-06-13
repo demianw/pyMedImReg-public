@@ -31,7 +31,7 @@ def configuration(parent_package='', top_path=None):
             ('MINOR_VERSION', '1')
         ],
         sources=[
-            '_metrics.c',
+            '_metrics_densities.c',
         ],
         include_dirs=[numpy.get_include()] + lapack_include_dirs,
         libraries=lapack_libs,
