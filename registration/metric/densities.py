@@ -1,4 +1,4 @@
-from _metrics import gauss_transform
+from _metrics_densities import gauss_transform
 from .basis import Metric
 import numpy
 
