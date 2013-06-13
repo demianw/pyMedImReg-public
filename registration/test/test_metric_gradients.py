@@ -1,5 +1,5 @@
 from .. import metric
-from ..metric import _metrics
+from ..metric import _metrics_densities
 
 import inspect
 
@@ -81,18 +81,6 @@ def setup_metrics(N=3, noise=1e-4, random=numpy.random.RandomState(0)):
             ),
             {}
         ),
-        'VectorPatchParticlesL2': (
-            (
-                points,
-                vectors,
-                1.,
-                points_fixed,
-                vectors_fixed,
-                1.
-            ),
-            {}
-        ),
-
     }
 
 
@@ -249,9 +237,9 @@ def _metric_gradient_tensors_centered(metric_name, index, metric_initialization,
 def test_gauss_transform(N=10, M=50, sigma=1, eps=1e-5, random=numpy.random.RandomState(0)):
     points_fixed = random.randn(N, 3)
     points_moving = random.randn(M, 3)
-    f = lambda x: _metrics.gauss_transform(x.reshape(
+    f = lambda x: _metrics_densities.gauss_transform(x.reshape(
         len(x) / 3, 3), points_fixed, sigma)[0]
-    g = lambda x: _metrics.gauss_transform(x.reshape(
+    g = lambda x: _metrics_densities.gauss_transform(x.reshape(
         len(x) / 3, 3), points_fixed, sigma)[-1]
 
     approx_g = approx_fprime(points_fixed.ravel(), f, eps).reshape(N, 3)
