@@ -25,7 +25,7 @@ def configuration(parent_package='', top_path=None):
         except:
             pass
     config.add_extension(
-        '_metrics',
+        '_metrics_densities',
         define_macros=[
             ('MAJOR_VERSION', '0'),
             ('MINOR_VERSION', '1')
