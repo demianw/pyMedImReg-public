@@ -4,9 +4,7 @@
 def configuration(parent_package='', top_path=None):
     from numpy.distutils.misc_util import Configuration
 
-    config = Configuration('model', parent_package, top_path)
-    config.add_subpackage('kernel')
-
+    config = Configuration('kernel', parent_package, top_path)
     return config
 
 
