@@ -225,15 +225,15 @@ latex_documents = [('index', 'user_guide.tex', u'registration user guide',
 # Additional stuff for the LaTeX preamble.
 latex_preamble = """
 \usepackage{amsmath}\usepackage{amsfonts}\usepackage{bm}\usepackage{morefloats}
-\usepackage{enumitem} \renewcommand{\Re}{\ensuremath{\mathbb R}}
+\usepackage{enumitem}
 """
-
+# \renewcommand{\Re}{\ensuremath{\mathbb R}}
 pngmath_latex_preamble = r"""
 \usepackage{amsmath}\usepackage{amsfonts}\usepackage{bm}\usepackage{morefloats}
 \usepackage{enumitem}
- \renewcommand{\Re}{\ensuremath{\mathbb R}}
-"""
 
+"""
+# \renewcommand{\Re}{\ensuremath{\mathbb R}}
 # Documents to append as an appendix to all manuals.
 #latex_appendices = []
 
